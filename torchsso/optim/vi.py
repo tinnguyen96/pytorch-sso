@@ -146,6 +146,11 @@ class VIOptimizer(SecondOrderOptimizer):
                 if getattr(p, 'grad', None) is not None \
                         and getattr(m, 'grad', None) is not None:
                     p.grad.copy_(m.grad)
+                    
+    def reportFinalPriorVariance(self):
+        group = self.param_groups[0]
+        priorVariance = (group['std_scale']**2)/group['l2_reg']
+        return priorVariance
 
     def adjust_kl_weighting(self):
         warmup_steps = self.defaults['warmup_kl_weighting_steps']
@@ -256,6 +261,52 @@ class VIOptimizer(SecondOrderOptimizer):
         self.adjust_kl_weighting()
 
         return loss, prob
+    
+    def computeELBO(self, trainDataLoader, mc=10):
+        """
+        Inputs:
+            trainDataLoader: dataLoader object
+            mc: scalar, number of MC draws from approximate posterior to estimate ELBO
+        """
+        # compute negative entropy
+        negEnt = 0
+        for group in self.param_groups:
+            params, curv, mean = group['params'], group["curv"], group['mean']
+            en = curv.computeEntropy(params, mean, group["std_scale"])
+            negEnt += en # because of mean-field assumptions, entropy is additive
+            
+        # compute fit
+        priorVariance = self.reportFinalPriorVariance()
+        fits = []
+        for _ in range(mc):
+            fit = 0
+            self.sample_params()
+            
+            # log-likelihood under the prior
+            for group in self.param_groups:
+                params, curv, mean = group['params'], group["curv"], group['mean']
+                priorLL = curv.evaluatePriorLikelihood(params, priorVariance)
+                fit += priorLL 
+            
+            for data, target in trainDataLoader:
+                output = self.model(data)
+                dataLL = 0
+                if output.ndim == 2:
+                    prob = F.softmax(output, dim=1) # (nClasses, batchSize)
+                    for n, val in enumerate(target):
+                        dataLL += torch.log(prob[val, n])
+                elif output.ndim == 1:
+                    prob = torch.sigmoid(output) # (nClasses,)
+                    dataLL += torch.log(prob[target])
+                fit += dataLL
+                
+        fits = torch.mean(fit)
+        elbo = negEnt + fit
+        
+        # reset the NN parameters
+        self.copy_mean_to_params()
+        
+        return elbo
 
     def prediction(self, data, mc=None, keep_probs=False):
 

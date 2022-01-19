@@ -1,5 +1,6 @@
 import math
 
+from torch.distributions import Normal
 import torch
 import torch.nn as nn
 import torchsso
@@ -207,6 +208,9 @@ class Curvature(object):
 
     def sample_params(self, params, mean, std_scale):
         raise NotImplementedError
+        
+    def computeEntropy(self, params, mean, std_scale):
+        raise NotImplementedError
 
     def std_norm(self):
         raise NotImplementedError
@@ -244,13 +248,36 @@ class DiagCurvature(Curvature):
         for p, m, std in zip(params, mean, self.std):
             noise = torch.randn_like(m)
             p.data.copy_(torch.addcmul(m, std_scale, noise, std))
+        
+    def evaluatePriorLikelihood(self, params, priorVariance, priorMean = 0):
+        """
+        Inputs:
+            params:
+            priorVariance: scalar,
+            priorMean: scalar
+            
+        Returns:
+            priorLL: scalar
+        """
+        priorLL = 0
+        for p in params:
+            obj = Normal(loc=priorMean, scale=np.sqrt(priorVariance))
+            priorLL += obj.log_prob(p.data)
+        return priorLL
+        
+    def computeEntropy(self, params, mean, std_scale):
+        en = 0
+        for _, m, std in zip(params, mean, self.std):
+            actualStd = std*std_scale
+            obj = Normal(loc=m, scale=actualStd)
+            en += obj.entropy()
+        return en
 
     def std_norm(self):
         if self.std is None:
             return 0
 
         return sum(std.norm().item() for std in self.std)
-
 
 class KronCurvature(Curvature):
 

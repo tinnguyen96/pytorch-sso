@@ -225,6 +225,10 @@ def main():
 
         # train
         accuracy, loss, confidence = train(model, device, train_loader, optimizer, scheduler, epoch, args, logger)
+        
+        # report lower bound
+        elbo = reportELBO(train_loader, optimizer, args)
+        print("epoch = %d, elbo = %.2f" %(epoch, elbo))
 
         # val
         val_accuracy, val_loss = validate(model, device, val_loader, optimizer)
@@ -247,6 +251,13 @@ def main():
                 'epoch': epoch
             }
             torch.save(data, path)
+            
+            
+def reportELBO(train_loader, optimizer, args):
+    assert args.optim_name == VIOptimizer.__name__
+    mc = 5
+    elbo = optimizer.computeELBO(train_loader, mc)
+    return elbo
 
 
 def train(model, device, train_loader, optimizer, scheduler, epoch, args, logger):
